@@ -2656,31 +2656,18 @@
                         if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
                             const transcript = data.channel.alternatives[0].transcript;
                             const isFinal = data.is_final;
-                            const speechFinal = data.speech_final;
 
                             if (transcript) {
                                 // Live UI Update
                                 const ui = document.getElementById('teacher-transcript');
                                 if (ui) {
-                                    if (isFinal) {
-                                        ui.innerText = (this.teacherVad.pendingTranscript + ' ' + transcript).trim();
-                                    } else {
-                                        ui.innerText = (this.teacherVad.pendingTranscript + ' ' + transcript).trim();
-                                    }
+                                    ui.innerText = transcript;
                                 }
 
-                                // Handle final transcripts
+                                // Broadcast immediately on final transcripts - no gap
                                 if (isFinal && transcript.trim()) {
-                                    console.log('[Deepgram] Final:', transcript);
-                                    this.teacherVad.pendingTranscript += ' ' + transcript.trim();
-                                    this.teacherVad.pendingTranscript = this.teacherVad.pendingTranscript.trim();
-                                    
-                                    // Broadcast on speech_final (utterance end) or sentence ending
-                                    if (speechFinal || this.endsWithSentence(this.teacherVad.pendingTranscript)) {
-                                        console.log('[Deepgram] Broadcasting segment:', this.teacherVad.pendingTranscript);
-                                        this.broadcastMessage(this.teacherVad.pendingTranscript);
-                                        this.teacherVad.pendingTranscript = '';
-                                    }
+                                    console.log('[Deepgram] Broadcasting:', transcript);
+                                    this.broadcastMessage(transcript.trim());
                                 }
                             }
                         }
