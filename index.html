@@ -839,6 +839,24 @@
                     sampleInterval: 30           // ms between volume checks (aggressive polling)
                 };
 
+                // Audio constraints for noise cancellation and voice focus
+                this.audioConstraints = {
+                    audio: {
+                        echoCancellation: { ideal: true },
+                        noiseSuppression: { ideal: true },
+                        autoGainControl: { ideal: true },
+                        // Voice isolation (Chrome 116+)
+                        voiceIsolation: { ideal: true },
+                        // Optimize for speech
+                        channelCount: { ideal: 1 },
+                        sampleRate: { ideal: 16000 },  // Optimal for speech recognition
+                        sampleSize: { ideal: 16 }
+                    }
+                };
+
+                // Sentence ending patterns for smart segmentation
+                this.sentenceEndPatterns = /[.!?。！？]+\s*$/;
+
                 // Teacher VAD state
                 this.teacherVad = {
                     audioContext: null,
@@ -2180,18 +2198,55 @@
             // ========== VAD (Voice Activity Detection) Methods ==========
             
             /**
-             * Initialize VAD for a given audio stream
+             * Initialize VAD for a given audio stream with voice-focused filtering
              * @param {MediaStream} stream - The audio stream to analyze
              * @returns {Object} - { audioContext, analyser, dataArray }
              */
             initVadAnalyser(stream) {
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Create source from stream
+                const source = audioContext.createMediaStreamSource(stream);
+                
+                // High-pass filter to remove low rumble (below 80Hz)
+                const highPass = audioContext.createBiquadFilter();
+                highPass.type = 'highpass';
+                highPass.frequency.value = 80;
+                highPass.Q.value = 0.7;
+                
+                // Low-pass filter to focus on voice frequencies (below 4000Hz)
+                const lowPass = audioContext.createBiquadFilter();
+                lowPass.type = 'lowpass';
+                lowPass.frequency.value = 4000;
+                lowPass.Q.value = 0.7;
+                
+                // Band-pass emphasis for voice clarity (300Hz-3400Hz)
+                const voiceBand = audioContext.createBiquadFilter();
+                voiceBand.type = 'peaking';
+                voiceBand.frequency.value = 1000;  // Center of voice band
+                voiceBand.Q.value = 0.5;
+                voiceBand.gain.value = 3;  // Boost voice frequencies
+                
+                // Compressor for consistent levels
+                const compressor = audioContext.createDynamicsCompressor();
+                compressor.threshold.value = -24;
+                compressor.knee.value = 12;
+                compressor.ratio.value = 4;
+                compressor.attack.value = 0.003;
+                compressor.release.value = 0.15;
+                
+                // Analyser for volume detection
                 const analyser = audioContext.createAnalyser();
                 analyser.fftSize = 512;
-                analyser.smoothingTimeConstant = 0.5;
+                analyser.smoothingTimeConstant = 0.3;  // Faster response
                 
-                const source = audioContext.createMediaStreamSource(stream);
-                source.connect(analyser);
+                // Connect the audio processing chain
+                source.connect(highPass);
+                highPass.connect(lowPass);
+                lowPass.connect(voiceBand);
+                voiceBand.connect(compressor);
+                compressor.connect(analyser);
+                // Note: Not connecting to destination to avoid feedback
                 
                 const dataArray = new Uint8Array(analyser.frequencyBinCount);
                 
@@ -2199,23 +2254,45 @@
             }
 
             /**
-             * Get current volume level from analyser (0-1 normalized)
+             * Get current volume level from analyser (0-1 normalized) with voice band focus
              * @param {AnalyserNode} analyser 
              * @param {Uint8Array} dataArray 
              * @returns {number} - Volume level 0-1
              */
             getVolumeLevel(analyser, dataArray) {
                 analyser.getByteFrequencyData(dataArray);
+                
+                // Focus on voice frequency bins (roughly 100Hz-3500Hz)
+                // With 512 FFT and 16kHz sample rate: each bin = ~31Hz
+                // Voice range: bins 3-112 approximately
+                const sampleRate = analyser.context.sampleRate;
+                const binSize = sampleRate / analyser.fftSize;
+                const voiceLowBin = Math.floor(100 / binSize);
+                const voiceHighBin = Math.min(Math.floor(3500 / binSize), dataArray.length - 1);
+                
                 let sum = 0;
-                for (let i = 0; i < dataArray.length; i++) {
+                let count = 0;
+                for (let i = voiceLowBin; i <= voiceHighBin; i++) {
                     sum += dataArray[i];
+                    count++;
                 }
-                const average = sum / dataArray.length;
+                
+                const average = count > 0 ? sum / count : 0;
                 return average / 255; // Normalize to 0-1
             }
 
             /**
-             * Start VAD monitoring for teacher
+             * Check if text ends with a sentence-ending pattern
+             * @param {string} text
+             * @returns {boolean}
+             */
+            endsWithSentence(text) {
+                if (!text) return false;
+                return this.sentenceEndPatterns.test(text.trim());
+            }
+
+            /**
+             * Start VAD monitoring for teacher with sentence-based segmentation
              * @param {MediaStream} stream 
              */
             startTeacherVad(stream) {
@@ -2246,18 +2323,36 @@
                         if (this.teacherVad.isSpeaking) {
                             if (!this.teacherVad.silenceStart) {
                                 this.teacherVad.silenceStart = now;
-                            } else if (now - this.teacherVad.silenceStart >= this.vadConfig.silenceDuration) {
-                                // Silence exceeded threshold - end segment
-                                const speechDuration = this.teacherVad.silenceStart - (this.teacherVad.speechStart || now);
+                            } else {
+                                const silenceDuration = now - this.teacherVad.silenceStart;
+                                const hasSentenceEnd = this.endsWithSentence(this.teacherVad.pendingTranscript);
                                 
-                                if (speechDuration >= this.vadConfig.minSpeechDuration) {
-                                    // Valid speech segment ended - flush pending transcript
-                                    if (this.teacherVad.pendingTranscript.trim()) {
-                                        console.log('[VAD] Flushing segment:', this.teacherVad.pendingTranscript.trim());
-                                        this.broadcastMessage(this.teacherVad.pendingTranscript.trim());
-                                        this.teacherVad.pendingTranscript = '';
+                                // Flush faster if sentence ends, otherwise wait for normal silence duration
+                                const flushThreshold = hasSentenceEnd 
+                                    ? Math.min(200, this.vadConfig.silenceDuration) // Quick flush on sentence end
+                                    : this.vadConfig.silenceDuration;
+                                
+                                if (silenceDuration >= flushThreshold) {
+                                    const speechDuration = this.teacherVad.silenceStart - (this.teacherVad.speechStart || now);
+                                
+                                    if (speechDuration >= this.vadConfig.minSpeechDuration) {
+                                        // Valid speech segment ended - flush pending transcript
+                                        if (this.teacherVad.pendingTranscript.trim()) {
+                                            console.log('[VAD] Flushing segment:', this.teacherVad.pendingTranscript.trim());
+                                            this.broadcastMessage(this.teacherVad.pendingTranscript.trim());
+                                            this.teacherVad.pendingTranscript = '';
+                                        }
                                     }
+                                
+                                    this.teacherVad.isSpeaking = false;
+                                    this.teacherVad.speechStart = null;
+                                    console.log('[VAD] Speech ended');
                                 }
+                            }
+                        }
+                    }
+                }, this.vadConfig.sampleInterval);
+            }
                                 
                                 this.teacherVad.isSpeaking = false;
                                 this.teacherVad.speechStart = null;
@@ -2401,8 +2496,8 @@
                     try { this.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { }
                 }
 
-                // Get microphone stream for VAD
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Get microphone stream with noise cancellation for VAD
+                const stream = await navigator.mediaDevices.getUserMedia(this.audioConstraints);
                 this.teacherVad.mediaStream = stream;
                 
                 // Start VAD monitoring
