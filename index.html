@@ -1388,8 +1388,9 @@
                         for (let i = event.resultIndex; i < event.results.length; i++) {
                             const transcript = event.results[i][0].transcript;
                             if (event.results[i].isFinal) {
-                                // Clean up periods after okey/ok for Dutch
+                                // Clean up periods after okey/ok for Dutch, and replace all periods with commas
                                 let cleaned = transcript.replace(/\b(oké|oke|ok|okay)\.\s*/gi, '$1 ').trim();
+                                cleaned = cleaned.replace(/\./g, ',');  // Replace periods with commas
                                 this.student.finalParts.push(cleaned);
                             } else {
                                 interim = transcript;
@@ -2186,8 +2187,9 @@
                     for (let i = event.resultIndex; i < event.results.length; i++) {
                         const transcript = event.results[i][0].transcript;
                         if (event.results[i].isFinal) {
-                            // Clean up periods after okey/ok for Dutch
+                            // Clean up periods after okey/ok for Dutch, and replace all periods with commas
                             let cleaned = transcript.replace(/\b(oké|oke|ok|okay)\.\s*/gi, '$1 ').trim();
+                            cleaned = cleaned.replace(/\./g, ',');  // Replace periods with commas
                             this.broadcastMessage(cleaned);
                         } else {
                             interim = transcript;
