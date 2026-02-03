@@ -6,10 +6,8 @@
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#3b82f6">
-    <link rel="manifest" href="./manifest.json">
-    <link rel="icon" type="image/png" href="./pwa_icon.png">
-    <link rel="apple-touch-icon" href="./pwa_icon.png">
-    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="manifest"
+        href='data:application/json,{"name":"Succes Class","short_name":"Succes","start_url":"./","display":"standalone","background_color":"#ffffff","theme_color":"#3b82f6","icons":[{"src":"pwa_icon.png","sizes":"512x512","type":"image/png"}]}'>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Succes Class - Real-time Translation & Hybrid Learning</title>
@@ -577,30 +575,10 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, push, onChildAdded, remove, get, set } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
-        // Web Speech API initialization
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const SpeechGrammarList = window.SpeechGrammarList || window.webkitSpeechGrammarList;
-        const SpeechRecognitionEvent = window.SpeechRecognitionEvent || window.webkitSpeechRecognitionEvent;
 
         // --- CREDENTIALS ---
         const CREDENTIALS = {
-            DEEPGRAM: {
-                API_KEY: "eba02cb3205eae28912c2fe725f75c1014c79280",
-                ENDPOINT: "wss://api.deepgram.com/v1/listen",
-                // Deepgram options
-                OPTIONS: {
-                    endpointing: 10,       // Very fast endpointing (10ms)
-                    punctuate: false,      // No punctuation for continuous flow
-                    language: "multi",     // Auto-detect language
-                    model: "nova-3",       // Latest model
-                    encoding: "linear16",
-                    sample_rate: 16000,
-                    channels: 1,
-                    interim_results: true,
-                    smart_format: false,   // Disable smart formatting
-                    diarize: false
-                }
-            },
+            CARTESIA: "sk_car_yWEX9Mp2LwKju8FXyosGhj",
             CARTESIA: "sk_car_yWEX9Mp2LwKju8FXyosGhj",
             CARTESIA_VOICES: {
                 "en": "cbaf8084-f009-4838-a096-07ee2e6612b1", // Cathy
@@ -844,68 +822,9 @@
                     isAudioPlaying: false
                 };
 
-                // Teacher Web Speech API
+                // Teacher Web Speech
                 this.recognition = null;
                 this.wakeLock = null;
-
-                // VAD (Voice Activity Detection) Configuration
-                this.vadConfig = {
-                    silenceThreshold: 0.02,      // Volume below this = silence
-                    silenceDuration: 350,        // ms of silence before segment ends (very fast)
-                    minSpeechDuration: 150,      // ms minimum speech to count as valid
-                    sampleInterval: 30           // ms between volume checks (aggressive polling)
-                };
-
-                // Audio constraints for noise cancellation and voice focus
-                this.audioConstraints = {
-                    audio: {
-                        echoCancellation: { ideal: true },
-                        noiseSuppression: { ideal: true },
-                        autoGainControl: { ideal: true },
-                        // Voice isolation (Chrome 116+)
-                        voiceIsolation: { ideal: true },
-                        // Optimize for speech
-                        channelCount: { ideal: 1 },
-                        sampleRate: { ideal: 16000 },  // Optimal for speech recognition
-                        sampleSize: { ideal: 16 }
-                    }
-                };
-
-                // Sentence ending patterns for smart segmentation
-                this.sentenceEndPatterns = /[.!?。！？]+\s*$/;
-
-                // Teacher VAD state
-                this.teacherVad = {
-                    audioContext: null,
-                    analyser: null,
-                    mediaStream: null,
-                    isSpeaking: false,
-                    silenceStart: null,
-                    speechStart: null,
-                    vadInterval: null,
-                    pendingTranscript: '',
-                    lastBroadcastTime: 0
-                };
-
-                // Deepgram WebSocket state
-                this.deepgram = {
-                    socket: null,
-                    audioContext: null,
-                    processor: null,
-                    source: null,
-                    isConnected: false,
-                    reconnectAttempts: 0,
-                    maxReconnectAttempts: 3
-                };
-
-                // Student Deepgram state
-                this.studentDeepgram = {
-                    socket: null,
-                    audioContext: null,
-                    processor: null,
-                    source: null,
-                    isConnected: false
-                };
 
                 // Student mic/request flow state
                 this.student = {
@@ -921,16 +840,7 @@
                     mediaStream: null,
                     audioChunks: [],
                     finalParts: [],
-                    lastInterim: '',
-                    // Student VAD state
-                    vad: {
-                        audioContext: null,
-                        analyser: null,
-                        isSpeaking: false,
-                        silenceStart: null,
-                        speechStart: null,
-                        vadInterval: null
-                    }
+                    lastInterim: ''
                 };
 
                 this.bindAll();
@@ -1029,9 +939,19 @@
 
             registerServiceWorker() {
                 if ('serviceWorker' in navigator) {
-                    navigator.serviceWorker.register('./sw.js')
-                        .then(reg => console.log('SW registered:', reg.scope))
-                        .catch(err => console.log('SW failed:', err));
+                    const swCode = `
+                        const CACHE_NAME = 'orbit-v1';
+                        const ASSETS = ['./', './index.html', './pwa_icon.png'];
+                        self.addEventListener('install', (e) => {
+                            e.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));
+                        });
+                        self.addEventListener('fetch', (e) => {
+                            e.respondWith(caches.match(e.request).then((res) => res || fetch(e.request)));
+                        });
+                    `;
+                    const blob = new Blob([swCode], { type: 'application/javascript' });
+                    const url = URL.createObjectURL(blob);
+                    navigator.serviceWorker.register(url).catch(err => console.log('SW failed', err));
                 }
             }
 
@@ -1431,87 +1351,31 @@
 
                 try {
                     // Reset capture buffers
+                    this.student.audioChunks = [];
                     this.student.finalParts = [];
                     this.student.lastInterim = '';
 
-                    // Start media stream with noise cancellation for audio recording
-                    this.student.mediaStream = await navigator.mediaDevices.getUserMedia(this.audioConstraints);
-
-                    // Start VAD monitoring for student
-                    this.startStudentVad(this.student.mediaStream);
+                    // Start media stream
+                    this.student.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
                     // Wake Lock (best-effort)
                     if ('wakeLock' in navigator) {
                         try { this.wakeLock = await navigator.wakeLock.request('screen'); } catch (_) { }
                     }
 
-                    // Setup Audio Context for PCM conversion (Deepgram)
-                    this.studentDeepgram.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                        sampleRate: 16000
-                    });
+                    // Start Web Speech API
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    if (!SpeechRecognition) throw new Error("Web Speech API not supported");
                     
-                    this.studentDeepgram.source = this.studentDeepgram.audioContext.createMediaStreamSource(this.student.mediaStream);
-                    this.studentDeepgram.processor = this.studentDeepgram.audioContext.createScriptProcessor(4096, 1, 1);
+                    this.student.recognition = new SpeechRecognition();
+                    this.student.recognition.continuous = true;
+                    this.student.recognition.interimResults = true;
+                    this.student.recognition.lang = this.state.lang || 'en';
 
-                    // Connect Deepgram WebSocket for student
-                    const wsUrl = this.buildDeepgramUrl();
-                    console.log('[Deepgram Student] Connecting...');
-                    
-                    this.studentDeepgram.socket = new WebSocket(wsUrl, ['token', CREDENTIALS.DEEPGRAM.API_KEY]);
-
-                    this.studentDeepgram.socket.onopen = () => {
-                        console.log('[Deepgram Student] Connected');
-                        this.studentDeepgram.isConnected = true;
-                        
-                        // Start processing audio
-                        this.studentDeepgram.processor.onaudioprocess = (e) => {
-                            if (this.studentDeepgram.socket && this.studentDeepgram.socket.readyState === WebSocket.OPEN) {
-                                const inputData = e.inputBuffer.getChannelData(0);
-                                const pcmData = this.float32ToInt16(inputData);
-                                this.studentDeepgram.socket.send(pcmData.buffer);
-                            }
-                        };
-                        
-                        this.studentDeepgram.source.connect(this.studentDeepgram.processor);
-                        this.studentDeepgram.processor.connect(this.studentDeepgram.audioContext.destination);
-                    };
-
-                    this.studentDeepgram.socket.onmessage = (event) => {
-                        try {
-                            const data = JSON.parse(event.data);
-                            
-                            if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
-                                const transcript = data.channel.alternatives[0].transcript;
-                                const isFinal = data.is_final;
-
-                                if (transcript) {
-                                    this.student.lastInterim = transcript;
-                                    
-                                    if (isFinal && transcript.trim()) {
-                                        console.log('[Deepgram Student] Final:', transcript);
-                                        this.student.finalParts.push(transcript.trim());
-                                    }
-                                }
-                            }
-                        } catch (e) {
-                            console.error('[Deepgram Student] Parse error:', e);
-                        }
-                    };
-
-                    this.studentDeepgram.socket.onerror = (error) => {
-                        console.error('[Deepgram Student] Error:', error);
-                    };
-
-                    this.studentDeepgram.socket.onclose = () => {
-                        console.log('[Deepgram Student] Closed');
-                        this.studentDeepgram.isConnected = false;
-                    };
-
-                    // Setup MediaRecorder for audio capture (for playback)
+                    // MediaRecorder for audio capture
                     const options = {};
                     try { options.mimeType = 'audio/webm'; } catch (_) { }
                     this.student.mediaRecorder = new MediaRecorder(this.student.mediaStream, options);
-                    this.student.audioChunks = [];
 
                     this.student.mediaRecorder.ondataavailable = (e) => {
                         if (e.data && e.data.size > 0) {
@@ -1519,8 +1383,36 @@
                         }
                     };
 
-                    // Start recording
+                    this.student.recognition.onresult = (event) => {
+                        let interim = '';
+                        for (let i = event.resultIndex; i < event.results.length; i++) {
+                            const transcript = event.results[i][0].transcript;
+                            if (event.results[i].isFinal) {
+                                // Clean up periods after okey/ok for Dutch
+                                let cleaned = transcript.replace(/\b(oké|oke|ok|okay)\.\s*/gi, '$1 ').trim();
+                                this.student.finalParts.push(cleaned);
+                            } else {
+                                interim = transcript;
+                            }
+                        }
+                        this.student.lastInterim = interim;
+                    };
+
+                    this.student.recognition.onerror = (event) => {
+                        if (event.error !== 'no-speech') {
+                            console.error('Student speech error:', event.error);
+                        }
+                    };
+
+                    this.student.recognition.onend = () => {
+                        // Restart if still recording (continuous mode workaround)
+                        if (this.student.recording && this.student.recognition) {
+                            try { this.student.recognition.start(); } catch (_) { }
+                        }
+                    };
+
                     this.student.mediaRecorder.start(250);
+                    this.student.recognition.start();
                     this.student.recording = true;
                     this.updateStudentMicButton();
 
@@ -1532,43 +1424,8 @@
             }
 
             async stopStudentCapture(submit = true) {
-                // Stop VAD monitoring first
-                this.stopStudentVad();
-                
-                // Close Deepgram WebSocket
-                if (this.studentDeepgram.socket) {
-                    try {
-                        if (this.studentDeepgram.socket.readyState === WebSocket.OPEN) {
-                            this.studentDeepgram.socket.send(JSON.stringify({ type: 'CloseStream' }));
-                        }
-                        this.studentDeepgram.socket.close();
-                    } catch (_) { }
-                    this.studentDeepgram.socket = null;
-                }
-                
-                // Disconnect audio processing
-                try {
-                    if (this.studentDeepgram.processor) {
-                        this.studentDeepgram.processor.disconnect();
-                        this.studentDeepgram.processor = null;
-                    }
-                } catch (_) { }
-                
-                try {
-                    if (this.studentDeepgram.source) {
-                        this.studentDeepgram.source.disconnect();
-                        this.studentDeepgram.source = null;
-                    }
-                } catch (_) { }
-                
-                try {
-                    if (this.studentDeepgram.audioContext && this.studentDeepgram.audioContext.state !== 'closed') {
-                        this.studentDeepgram.audioContext.close();
-                    }
-                    this.studentDeepgram.audioContext = null;
-                } catch (_) { }
-                
-                this.studentDeepgram.isConnected = false;
+                // Stop speech recognition
+                try { if (this.student.recognition) this.student.recognition.stop(); } catch (_) { }
 
                 // Stop recorder first (to flush last chunk)
                 const recorder = this.student.mediaRecorder;
@@ -2288,266 +2145,6 @@
                 }
             }
 
-            // ========== VAD (Voice Activity Detection) Methods ==========
-            
-            /**
-             * Initialize VAD for a given audio stream with voice-focused filtering
-             * @param {MediaStream} stream - The audio stream to analyze
-             * @returns {Object} - { audioContext, analyser, dataArray }
-             */
-            initVadAnalyser(stream) {
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                
-                // Create source from stream
-                const source = audioContext.createMediaStreamSource(stream);
-                
-                // High-pass filter to remove low rumble (below 80Hz)
-                const highPass = audioContext.createBiquadFilter();
-                highPass.type = 'highpass';
-                highPass.frequency.value = 80;
-                highPass.Q.value = 0.7;
-                
-                // Low-pass filter to focus on voice frequencies (below 4000Hz)
-                const lowPass = audioContext.createBiquadFilter();
-                lowPass.type = 'lowpass';
-                lowPass.frequency.value = 4000;
-                lowPass.Q.value = 0.7;
-                
-                // Band-pass emphasis for voice clarity (300Hz-3400Hz)
-                const voiceBand = audioContext.createBiquadFilter();
-                voiceBand.type = 'peaking';
-                voiceBand.frequency.value = 1000;  // Center of voice band
-                voiceBand.Q.value = 0.5;
-                voiceBand.gain.value = 3;  // Boost voice frequencies
-                
-                // Compressor for consistent levels
-                const compressor = audioContext.createDynamicsCompressor();
-                compressor.threshold.value = -24;
-                compressor.knee.value = 12;
-                compressor.ratio.value = 4;
-                compressor.attack.value = 0.003;
-                compressor.release.value = 0.15;
-                
-                // Analyser for volume detection
-                const analyser = audioContext.createAnalyser();
-                analyser.fftSize = 512;
-                analyser.smoothingTimeConstant = 0.3;  // Faster response
-                
-                // Connect the audio processing chain
-                source.connect(highPass);
-                highPass.connect(lowPass);
-                lowPass.connect(voiceBand);
-                voiceBand.connect(compressor);
-                compressor.connect(analyser);
-                // Note: Not connecting to destination to avoid feedback
-                
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
-                
-                return { audioContext, analyser, dataArray };
-            }
-
-            /**
-             * Get current volume level from analyser (0-1 normalized) with voice band focus
-             * @param {AnalyserNode} analyser 
-             * @param {Uint8Array} dataArray 
-             * @returns {number} - Volume level 0-1
-             */
-            getVolumeLevel(analyser, dataArray) {
-                analyser.getByteFrequencyData(dataArray);
-                
-                // Focus on voice frequency bins (roughly 100Hz-3500Hz)
-                // With 512 FFT and 16kHz sample rate: each bin = ~31Hz
-                // Voice range: bins 3-112 approximately
-                const sampleRate = analyser.context.sampleRate;
-                const binSize = sampleRate / analyser.fftSize;
-                const voiceLowBin = Math.floor(100 / binSize);
-                const voiceHighBin = Math.min(Math.floor(3500 / binSize), dataArray.length - 1);
-                
-                let sum = 0;
-                let count = 0;
-                for (let i = voiceLowBin; i <= voiceHighBin; i++) {
-                    sum += dataArray[i];
-                    count++;
-                }
-                
-                const average = count > 0 ? sum / count : 0;
-                return average / 255; // Normalize to 0-1
-            }
-
-            /**
-             * Check if text ends with a sentence-ending pattern
-             * @param {string} text
-             * @returns {boolean}
-             */
-            endsWithSentence(text) {
-                if (!text) return false;
-                return this.sentenceEndPatterns.test(text.trim());
-            }
-
-            /**
-             * Start VAD monitoring for teacher with sentence-based segmentation
-             * @param {MediaStream} stream 
-             */
-            startTeacherVad(stream) {
-                const { audioContext, analyser, dataArray } = this.initVadAnalyser(stream);
-                
-                this.teacherVad.audioContext = audioContext;
-                this.teacherVad.analyser = analyser;
-                this.teacherVad.mediaStream = stream;
-                this.teacherVad.isSpeaking = false;
-                this.teacherVad.silenceStart = null;
-                this.teacherVad.speechStart = null;
-                this.teacherVad.pendingTranscript = '';
-
-                this.teacherVad.vadInterval = setInterval(() => {
-                    const volume = this.getVolumeLevel(analyser, dataArray);
-                    const now = Date.now();
-                    
-                    if (volume > this.vadConfig.silenceThreshold) {
-                        // Voice detected
-                        if (!this.teacherVad.isSpeaking) {
-                            this.teacherVad.isSpeaking = true;
-                            this.teacherVad.speechStart = now;
-                            this.teacherVad.silenceStart = null;
-                            console.log('[VAD] Speech started');
-                        }
-                    } else {
-                        // Silence detected
-                        if (this.teacherVad.isSpeaking) {
-                            if (!this.teacherVad.silenceStart) {
-                                this.teacherVad.silenceStart = now;
-                            } else {
-                                const silenceDuration = now - this.teacherVad.silenceStart;
-                                const hasSentenceEnd = this.endsWithSentence(this.teacherVad.pendingTranscript);
-                                
-                                // Flush faster if sentence ends, otherwise wait for normal silence duration
-                                const flushThreshold = hasSentenceEnd 
-                                    ? Math.min(200, this.vadConfig.silenceDuration) // Quick flush on sentence end
-                                    : this.vadConfig.silenceDuration;
-                                
-                                if (silenceDuration >= flushThreshold) {
-                                    const speechDuration = this.teacherVad.silenceStart - (this.teacherVad.speechStart || now);
-                                
-                                    if (speechDuration >= this.vadConfig.minSpeechDuration) {
-                                        // Valid speech segment ended - flush pending transcript
-                                        if (this.teacherVad.pendingTranscript.trim()) {
-                                            console.log('[VAD] Flushing segment:', this.teacherVad.pendingTranscript.trim());
-                                            this.broadcastMessage(this.teacherVad.pendingTranscript.trim());
-                                            this.teacherVad.pendingTranscript = '';
-                                        }
-                                    }
-                                
-                                    this.teacherVad.isSpeaking = false;
-                                    this.teacherVad.speechStart = null;
-                                    console.log('[VAD] Speech ended');
-                                }
-                            }
-                        }
-                    }
-                }, this.vadConfig.sampleInterval);
-            }
-
-            /**
-             * Stop teacher VAD monitoring
-             */
-            stopTeacherVad() {
-                if (this.teacherVad.vadInterval) {
-                    clearInterval(this.teacherVad.vadInterval);
-                    this.teacherVad.vadInterval = null;
-                }
-                
-                // Flush any remaining transcript
-                if (this.teacherVad.pendingTranscript.trim()) {
-                    this.broadcastMessage(this.teacherVad.pendingTranscript.trim());
-                    this.teacherVad.pendingTranscript = '';
-                }
-                
-                try {
-                    if (this.teacherVad.audioContext && this.teacherVad.audioContext.state !== 'closed') {
-                        this.teacherVad.audioContext.close();
-                    }
-                } catch (_) {}
-                
-                this.teacherVad.audioContext = null;
-                this.teacherVad.analyser = null;
-                this.teacherVad.isSpeaking = false;
-            }
-
-            /**
-             * Start VAD monitoring for student
-             * @param {MediaStream} stream 
-             */
-            startStudentVad(stream) {
-                const { audioContext, analyser, dataArray } = this.initVadAnalyser(stream);
-                
-                this.student.vad.audioContext = audioContext;
-                this.student.vad.analyser = analyser;
-                this.student.vad.isSpeaking = false;
-                this.student.vad.silenceStart = null;
-                this.student.vad.speechStart = null;
-
-                this.student.vad.vadInterval = setInterval(() => {
-                    const volume = this.getVolumeLevel(analyser, dataArray);
-                    const now = Date.now();
-                    
-                    if (volume > this.vadConfig.silenceThreshold) {
-                        // Voice detected
-                        if (!this.student.vad.isSpeaking) {
-                            this.student.vad.isSpeaking = true;
-                            this.student.vad.speechStart = now;
-                            this.student.vad.silenceStart = null;
-                        }
-                    } else {
-                        // Silence detected
-                        if (this.student.vad.isSpeaking) {
-                            if (!this.student.vad.silenceStart) {
-                                this.student.vad.silenceStart = now;
-                            }
-                        }
-                    }
-                }, this.vadConfig.sampleInterval);
-            }
-
-            /**
-             * Stop student VAD monitoring
-             */
-            stopStudentVad() {
-                if (this.student.vad.vadInterval) {
-                    clearInterval(this.student.vad.vadInterval);
-                    this.student.vad.vadInterval = null;
-                }
-                
-                try {
-                    if (this.student.vad.audioContext && this.student.vad.audioContext.state !== 'closed') {
-                        this.student.vad.audioContext.close();
-                    }
-                } catch (_) {}
-                
-                this.student.vad.audioContext = null;
-                this.student.vad.analyser = null;
-                this.student.vad.isSpeaking = false;
-            }
-
-            /**
-             * Check if student is still speaking (for auto-stop detection)
-             * @returns {boolean}
-             */
-            isStudentCurrentlySpeaking() {
-                if (!this.student.vad.analyser) return true; // Assume speaking if no VAD
-                
-                const now = Date.now();
-                const silenceStart = this.student.vad.silenceStart;
-                
-                // If silence has been going for longer than threshold, not speaking
-                if (silenceStart && (now - silenceStart) >= this.vadConfig.silenceDuration) {
-                    return false;
-                }
-                
-                return true;
-            }
-
-            // ========== End VAD Methods ==========
-
             async toggleMic() {
                 if (this.state.isMicActive) {
                     // STOP
@@ -2570,183 +2167,57 @@
                 }
             }
 
-            /**
-             * Build Deepgram WebSocket URL with options
-             */
-            buildDeepgramUrl() {
-                const opts = CREDENTIALS.DEEPGRAM.OPTIONS;
-                const params = new URLSearchParams({
-                    endpointing: opts.endpointing,
-                    punctuate: opts.punctuate,
-                    language: opts.language,
-                    model: opts.model,
-                    encoding: opts.encoding,
-                    sample_rate: opts.sample_rate,
-                    channels: opts.channels,
-                    interim_results: opts.interim_results,
-                    smart_format: opts.smart_format,
-                    diarize: opts.diarize
-                });
-                return `${CREDENTIALS.DEEPGRAM.ENDPOINT}?${params.toString()}`;
-            }
-
-            /**
-             * Convert Float32Array to Int16Array (linear16 PCM)
-             */
-            float32ToInt16(float32Array) {
-                const int16Array = new Int16Array(float32Array.length);
-                for (let i = 0; i < float32Array.length; i++) {
-                    const s = Math.max(-1, Math.min(1, float32Array[i]));
-                    int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                }
-                return int16Array;
-            }
-
             async startWebSpeech() {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SpeechRecognition) throw new Error("Web Speech API not supported");
+
                 // Wake Lock
                 if ('wakeLock' in navigator) {
                     try { this.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { }
                 }
 
-                // Get microphone stream with noise cancellation
-                const stream = await navigator.mediaDevices.getUserMedia(this.audioConstraints);
-                this.teacherVad.mediaStream = stream;
-                
-                // Start VAD monitoring
-                this.startTeacherVad(stream);
+                this.recognition = new SpeechRecognition();
+                this.recognition.continuous = true;
+                this.recognition.interimResults = true;
+                this.recognition.lang = this.state.lang || 'en';
 
-                // Setup Audio Context for PCM conversion
-                this.deepgram.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 16000
-                });
-                
-                this.deepgram.source = this.deepgram.audioContext.createMediaStreamSource(stream);
-                
-                // Create ScriptProcessor for PCM data (4096 buffer size)
-                this.deepgram.processor = this.deepgram.audioContext.createScriptProcessor(4096, 1, 1);
-
-                // Connect Deepgram WebSocket
-                const wsUrl = this.buildDeepgramUrl();
-                console.log('[Deepgram] Connecting to:', wsUrl);
-                
-                this.deepgram.socket = new WebSocket(wsUrl, ['token', CREDENTIALS.DEEPGRAM.API_KEY]);
-
-                this.deepgram.socket.onopen = () => {
-                    console.log('[Deepgram] WebSocket connected');
-                    this.deepgram.isConnected = true;
-                    this.deepgram.reconnectAttempts = 0;
-                    
-                    // Start processing audio
-                    this.deepgram.processor.onaudioprocess = (e) => {
-                        if (this.deepgram.socket && this.deepgram.socket.readyState === WebSocket.OPEN) {
-                            const inputData = e.inputBuffer.getChannelData(0);
-                            const pcmData = this.float32ToInt16(inputData);
-                            this.deepgram.socket.send(pcmData.buffer);
+                this.recognition.onresult = (event) => {
+                    let interim = '';
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        const transcript = event.results[i][0].transcript;
+                        if (event.results[i].isFinal) {
+                            // Clean up periods after okey/ok for Dutch
+                            let cleaned = transcript.replace(/\b(oké|oke|ok|okay)\.\s*/gi, '$1 ').trim();
+                            this.broadcastMessage(cleaned);
+                        } else {
+                            interim = transcript;
                         }
-                    };
-                    
-                    this.deepgram.source.connect(this.deepgram.processor);
-                    this.deepgram.processor.connect(this.deepgram.audioContext.destination);
+                    }
+                    // Live UI Update
+                    const ui = document.getElementById('teacher-transcript');
+                    if (interim) ui.innerText = interim;
                 };
 
-                this.deepgram.socket.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        
-                        if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
-                            const transcript = data.channel.alternatives[0].transcript;
-                            const isFinal = data.is_final;
-
-                            if (transcript) {
-                                // Live UI Update
-                                const ui = document.getElementById('teacher-transcript');
-                                if (ui) {
-                                    ui.innerText = transcript;
-                                }
-
-                                // Broadcast immediately on final transcripts - no gap
-                                if (isFinal && transcript.trim()) {
-                                    console.log('[Deepgram] Broadcasting:', transcript);
-                                    this.broadcastMessage(transcript.trim());
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        console.error('[Deepgram] Parse error:', e);
+                this.recognition.onerror = (event) => {
+                    if (event.error !== 'no-speech') {
+                        console.error('Speech error:', event.error);
                     }
                 };
 
-                this.deepgram.socket.onerror = (error) => {
-                    console.error('[Deepgram] WebSocket error:', error);
-                    this.showToast('Deepgram connection error', 'error');
-                };
-
-                this.deepgram.socket.onclose = (event) => {
-                    console.log('[Deepgram] WebSocket closed:', event.code, event.reason);
-                    this.deepgram.isConnected = false;
-                    
-                    // Attempt reconnection if still supposed to be active
-                    if (this.state.isMicActive && this.deepgram.reconnectAttempts < this.deepgram.maxReconnectAttempts) {
-                        this.deepgram.reconnectAttempts++;
-                        console.log(`[Deepgram] Reconnecting... attempt ${this.deepgram.reconnectAttempts}`);
-                        setTimeout(() => {
-                            if (this.state.isMicActive) {
-                                this.startWebSpeech();
-                            }
-                        }, 1000);
+                this.recognition.onend = () => {
+                    // Restart if still active (continuous mode workaround)
+                    if (this.state.isMicActive && this.recognition) {
+                        try { this.recognition.start(); } catch (_) { }
                     }
                 };
+
+                this.recognition.start();
             }
 
             stopWebSpeech() {
-                // Stop VAD monitoring first (will flush pending transcript)
-                this.stopTeacherVad();
-                
-                // Close Deepgram WebSocket
-                if (this.deepgram.socket) {
-                    try {
-                        // Send close message to Deepgram
-                        if (this.deepgram.socket.readyState === WebSocket.OPEN) {
-                            this.deepgram.socket.send(JSON.stringify({ type: 'CloseStream' }));
-                        }
-                        this.deepgram.socket.close();
-                    } catch (_) { }
-                    this.deepgram.socket = null;
-                }
-                
-                // Disconnect audio processing
-                try {
-                    if (this.deepgram.processor) {
-                        this.deepgram.processor.disconnect();
-                        this.deepgram.processor = null;
-                    }
-                } catch (_) { }
-                
-                try {
-                    if (this.deepgram.source) {
-                        this.deepgram.source.disconnect();
-                        this.deepgram.source = null;
-                    }
-                } catch (_) { }
-                
-                try {
-                    if (this.deepgram.audioContext && this.deepgram.audioContext.state !== 'closed') {
-                        this.deepgram.audioContext.close();
-                    }
-                    this.deepgram.audioContext = null;
-                } catch (_) { }
-                
-                // Stop media stream tracks
-                try {
-                    if (this.teacherVad.mediaStream) {
-                        this.teacherVad.mediaStream.getTracks().forEach(t => t.stop());
-                        this.teacherVad.mediaStream = null;
-                    }
-                } catch (_) { }
-                
+                try { if (this.recognition) this.recognition.stop(); } catch (_) { }
                 try { if (this.wakeLock) this.wakeLock.release(); } catch (_) { }
 
-                this.deepgram.isConnected = false;
                 this.recognition = null;
             }
 
@@ -2819,32 +2290,12 @@
                 }
             }
 
-            // Helper: Remove periods after ok/okay/okey to prevent sentence splitting
-            cleanOkeyPeriods(text) {
-                if (!text) return text;
-                // Remove period after standalone ok/okay/okey/oke/okee/oké at start or as single word
-                // Pattern: "Ok." or "Okay." or "Okey." etc followed by space or end
-                return text
-                    .replace(/^(ok[eéy]*)\.\s*/gi, '$1 ')  // At start: "Ok. Hello" -> "Ok Hello"
-                    .replace(/\s(ok[eéy]*)\.\s*/gi, ' $1 ') // Mid-sentence after space
-                    .replace(/^(ok[eéy]*)\.$/gi, '$1')      // Standalone: "Ok." -> "Ok"
-                    .trim();
-            }
-
             async translateText(text, source, target) {
                 if (!text) return '';
                 if (!source || !target) return text;
                 if (source === target) return text;
-                
-                // Normalize Dutch/Flemish "okey" variants before translation
-                let normalizedText = text;
-                if (source === 'nl' || source === 'nl-BE') {
-                    // Replace Dutch "okey" variants with standard "okay" for better translation
-                    normalizedText = text.replace(/\b(oké|okee|okey|oke)\b/gi, 'okay');
-                }
-                
                 try {
-                    const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${source}&tl=${target}&dt=t&q=${encodeURI(normalizedText)}`);
+                    const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${source}&tl=${target}&dt=t&q=${encodeURI(text)}`);
                     const json = await res.json();
                     return json[0][0][0];
                 } catch (e) { return text; }
