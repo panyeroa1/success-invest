@@ -590,14 +590,14 @@
                 // Deepgram options
                 OPTIONS: {
                     endpointing: 10,       // Very fast endpointing (10ms)
-                    punctuate: true,
+                    punctuate: false,      // No punctuation for continuous flow
                     language: "multi",     // Auto-detect language
                     model: "nova-3",       // Latest model
                     encoding: "linear16",
                     sample_rate: 16000,
                     channels: 1,
                     interim_results: true,
-                    smart_format: true,
+                    smart_format: false,   // Disable smart formatting
                     diarize: false
                 }
             },
