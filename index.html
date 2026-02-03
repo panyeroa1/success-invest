@@ -833,10 +833,10 @@
 
                 // VAD (Voice Activity Detection) Configuration
                 this.vadConfig = {
-                    silenceThreshold: 0.015,     // Volume below this = silence
-                    silenceDuration: 600,        // ms of silence before segment ends (reduced for faster response)
-                    minSpeechDuration: 200,      // ms minimum speech to count as valid
-                    sampleInterval: 50           // ms between volume checks (faster polling)
+                    silenceThreshold: 0.02,      // Volume below this = silence
+                    silenceDuration: 350,        // ms of silence before segment ends (very fast)
+                    minSpeechDuration: 150,      // ms minimum speech to count as valid
+                    sampleInterval: 30           // ms between volume checks (aggressive polling)
                 };
 
                 // Teacher VAD state
