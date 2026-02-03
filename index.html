@@ -584,6 +584,23 @@
 
         // --- CREDENTIALS ---
         const CREDENTIALS = {
+            DEEPGRAM: {
+                API_KEY: "eba02cb3205eae28912c2fe725f75c1014c79280",
+                ENDPOINT: "wss://api.deepgram.com/v1/listen",
+                // Deepgram options
+                OPTIONS: {
+                    endpointing: 10,       // Very fast endpointing (10ms)
+                    punctuate: true,
+                    language: "multi",     // Auto-detect language
+                    model: "nova-3",       // Latest model
+                    encoding: "linear16",
+                    sample_rate: 16000,
+                    channels: 1,
+                    interim_results: true,
+                    smart_format: true,
+                    diarize: false
+                }
+            },
             CARTESIA: "sk_car_yWEX9Mp2LwKju8FXyosGhj",
             CARTESIA_VOICES: {
                 "en": "cbaf8084-f009-4838-a096-07ee2e6612b1", // Cathy
@@ -868,6 +885,26 @@
                     vadInterval: null,
                     pendingTranscript: '',
                     lastBroadcastTime: 0
+                };
+
+                // Deepgram WebSocket state
+                this.deepgram = {
+                    socket: null,
+                    audioContext: null,
+                    processor: null,
+                    source: null,
+                    isConnected: false,
+                    reconnectAttempts: 0,
+                    maxReconnectAttempts: 3
+                };
+
+                // Student Deepgram state
+                this.studentDeepgram = {
+                    socket: null,
+                    audioContext: null,
+                    processor: null,
+                    source: null,
+                    isConnected: false
                 };
 
                 // Student mic/request flow state
@@ -1393,17 +1430,12 @@
                 if (this.student.recording) return;
 
                 try {
-                    // Check Web Speech API support
-                    if (!SpeechRecognition) {
-                        throw new Error('Web Speech API not supported in this browser');
-                    }
-
                     // Reset capture buffers
                     this.student.finalParts = [];
                     this.student.lastInterim = '';
 
-                    // Start media stream for audio recording
-                    this.student.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    // Start media stream with noise cancellation for audio recording
+                    this.student.mediaStream = await navigator.mediaDevices.getUserMedia(this.audioConstraints);
 
                     // Start VAD monitoring for student
                     this.startStudentVad(this.student.mediaStream);
@@ -1413,14 +1445,69 @@
                         try { this.wakeLock = await navigator.wakeLock.request('screen'); } catch (_) { }
                     }
 
-                    // Setup Web Speech Recognition
-                    this.student.recognition = new SpeechRecognition();
-                    this.student.recognition.continuous = true;
-                    this.student.recognition.interimResults = true;
-                    this.student.recognition.lang = this.state.lang || 'en-US';
-                    this.student.recognition.maxAlternatives = 1;
+                    // Setup Audio Context for PCM conversion (Deepgram)
+                    this.studentDeepgram.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: 16000
+                    });
+                    
+                    this.studentDeepgram.source = this.studentDeepgram.audioContext.createMediaStreamSource(this.student.mediaStream);
+                    this.studentDeepgram.processor = this.studentDeepgram.audioContext.createScriptProcessor(4096, 1, 1);
 
-                    // Setup MediaRecorder for audio capture
+                    // Connect Deepgram WebSocket for student
+                    const wsUrl = this.buildDeepgramUrl();
+                    console.log('[Deepgram Student] Connecting...');
+                    
+                    this.studentDeepgram.socket = new WebSocket(wsUrl, ['token', CREDENTIALS.DEEPGRAM.API_KEY]);
+
+                    this.studentDeepgram.socket.onopen = () => {
+                        console.log('[Deepgram Student] Connected');
+                        this.studentDeepgram.isConnected = true;
+                        
+                        // Start processing audio
+                        this.studentDeepgram.processor.onaudioprocess = (e) => {
+                            if (this.studentDeepgram.socket && this.studentDeepgram.socket.readyState === WebSocket.OPEN) {
+                                const inputData = e.inputBuffer.getChannelData(0);
+                                const pcmData = this.float32ToInt16(inputData);
+                                this.studentDeepgram.socket.send(pcmData.buffer);
+                            }
+                        };
+                        
+                        this.studentDeepgram.source.connect(this.studentDeepgram.processor);
+                        this.studentDeepgram.processor.connect(this.studentDeepgram.audioContext.destination);
+                    };
+
+                    this.studentDeepgram.socket.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            
+                            if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
+                                const transcript = data.channel.alternatives[0].transcript;
+                                const isFinal = data.is_final;
+
+                                if (transcript) {
+                                    this.student.lastInterim = transcript;
+                                    
+                                    if (isFinal && transcript.trim()) {
+                                        console.log('[Deepgram Student] Final:', transcript);
+                                        this.student.finalParts.push(transcript.trim());
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error('[Deepgram Student] Parse error:', e);
+                        }
+                    };
+
+                    this.studentDeepgram.socket.onerror = (error) => {
+                        console.error('[Deepgram Student] Error:', error);
+                    };
+
+                    this.studentDeepgram.socket.onclose = () => {
+                        console.log('[Deepgram Student] Closed');
+                        this.studentDeepgram.isConnected = false;
+                    };
+
+                    // Setup MediaRecorder for audio capture (for playback)
                     const options = {};
                     try { options.mimeType = 'audio/webm'; } catch (_) { }
                     this.student.mediaRecorder = new MediaRecorder(this.student.mediaStream, options);
@@ -1432,33 +1519,7 @@
                         }
                     };
 
-                    // Speech recognition event handlers
-                    this.student.recognition.onresult = (event) => {
-                        let interimTranscript = '';
-                        let finalTranscript = '';
-
-                        for (let i = event.resultIndex; i < event.results.length; i++) {
-                            const transcript = event.results[i][0].transcript;
-                            if (event.results[i].isFinal) {
-                                finalTranscript += transcript;
-                            } else {
-                                interimTranscript += transcript;
-                            }
-                        }
-
-                        this.student.lastInterim = interimTranscript;
-
-                        if (finalTranscript) {
-                            this.student.finalParts.push(finalTranscript.trim());
-                        }
-                    };
-
-                    this.student.recognition.onerror = (event) => {
-                        console.error('Student speech recognition error:', event.error);
-                    };
-
-                    // Start recognition and recording
-                    this.student.recognition.start();
+                    // Start recording
                     this.student.mediaRecorder.start(250);
                     this.student.recording = true;
                     this.updateStudentMicButton();
@@ -1474,8 +1535,40 @@
                 // Stop VAD monitoring first
                 this.stopStudentVad();
                 
-                // Stop speech recognition
-                try { if (this.student.recognition) this.student.recognition.stop(); } catch (_) { }
+                // Close Deepgram WebSocket
+                if (this.studentDeepgram.socket) {
+                    try {
+                        if (this.studentDeepgram.socket.readyState === WebSocket.OPEN) {
+                            this.studentDeepgram.socket.send(JSON.stringify({ type: 'CloseStream' }));
+                        }
+                        this.studentDeepgram.socket.close();
+                    } catch (_) { }
+                    this.studentDeepgram.socket = null;
+                }
+                
+                // Disconnect audio processing
+                try {
+                    if (this.studentDeepgram.processor) {
+                        this.studentDeepgram.processor.disconnect();
+                        this.studentDeepgram.processor = null;
+                    }
+                } catch (_) { }
+                
+                try {
+                    if (this.studentDeepgram.source) {
+                        this.studentDeepgram.source.disconnect();
+                        this.studentDeepgram.source = null;
+                    }
+                } catch (_) { }
+                
+                try {
+                    if (this.studentDeepgram.audioContext && this.studentDeepgram.audioContext.state !== 'closed') {
+                        this.studentDeepgram.audioContext.close();
+                    }
+                    this.studentDeepgram.audioContext = null;
+                } catch (_) { }
+                
+                this.studentDeepgram.isConnected = false;
 
                 // Stop recorder first (to flush last chunk)
                 const recorder = this.student.mediaRecorder;
@@ -2353,15 +2446,6 @@
                     }
                 }, this.vadConfig.sampleInterval);
             }
-                                
-                                this.teacherVad.isSpeaking = false;
-                                this.teacherVad.speechStart = null;
-                                console.log('[VAD] Speech ended');
-                            }
-                        }
-                    }
-                }, this.vadConfig.sampleInterval);
-            }
 
             /**
              * Stop teacher VAD monitoring
@@ -2486,91 +2570,184 @@
                 }
             }
 
-            async startWebSpeech() {
-                if (!SpeechRecognition) {
-                    throw new Error('Web Speech API not supported in this browser');
-                }
+            /**
+             * Build Deepgram WebSocket URL with options
+             */
+            buildDeepgramUrl() {
+                const opts = CREDENTIALS.DEEPGRAM.OPTIONS;
+                const params = new URLSearchParams({
+                    endpointing: opts.endpointing,
+                    punctuate: opts.punctuate,
+                    language: opts.language,
+                    model: opts.model,
+                    encoding: opts.encoding,
+                    sample_rate: opts.sample_rate,
+                    channels: opts.channels,
+                    interim_results: opts.interim_results,
+                    smart_format: opts.smart_format,
+                    diarize: opts.diarize
+                });
+                return `${CREDENTIALS.DEEPGRAM.ENDPOINT}?${params.toString()}`;
+            }
 
+            /**
+             * Convert Float32Array to Int16Array (linear16 PCM)
+             */
+            float32ToInt16(float32Array) {
+                const int16Array = new Int16Array(float32Array.length);
+                for (let i = 0; i < float32Array.length; i++) {
+                    const s = Math.max(-1, Math.min(1, float32Array[i]));
+                    int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                return int16Array;
+            }
+
+            async startWebSpeech() {
                 // Wake Lock
                 if ('wakeLock' in navigator) {
                     try { this.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { }
                 }
 
-                // Get microphone stream with noise cancellation for VAD
+                // Get microphone stream with noise cancellation
                 const stream = await navigator.mediaDevices.getUserMedia(this.audioConstraints);
                 this.teacherVad.mediaStream = stream;
                 
                 // Start VAD monitoring
                 this.startTeacherVad(stream);
 
-                this.recognition = new SpeechRecognition();
-                this.recognition.continuous = true;
-                this.recognition.interimResults = true;
-                this.recognition.lang = this.state.lang || 'en-US';
-                this.recognition.maxAlternatives = 1;
+                // Setup Audio Context for PCM conversion
+                this.deepgram.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+                
+                this.deepgram.source = this.deepgram.audioContext.createMediaStreamSource(stream);
+                
+                // Create ScriptProcessor for PCM data (4096 buffer size)
+                this.deepgram.processor = this.deepgram.audioContext.createScriptProcessor(4096, 1, 1);
 
-                this.recognition.onstart = () => {
-                    console.log('Speech recognition started with VAD');
+                // Connect Deepgram WebSocket
+                const wsUrl = this.buildDeepgramUrl();
+                console.log('[Deepgram] Connecting to:', wsUrl);
+                
+                this.deepgram.socket = new WebSocket(wsUrl, ['token', CREDENTIALS.DEEPGRAM.API_KEY]);
+
+                this.deepgram.socket.onopen = () => {
+                    console.log('[Deepgram] WebSocket connected');
+                    this.deepgram.isConnected = true;
+                    this.deepgram.reconnectAttempts = 0;
+                    
+                    // Start processing audio
+                    this.deepgram.processor.onaudioprocess = (e) => {
+                        if (this.deepgram.socket && this.deepgram.socket.readyState === WebSocket.OPEN) {
+                            const inputData = e.inputBuffer.getChannelData(0);
+                            const pcmData = this.float32ToInt16(inputData);
+                            this.deepgram.socket.send(pcmData.buffer);
+                        }
+                    };
+                    
+                    this.deepgram.source.connect(this.deepgram.processor);
+                    this.deepgram.processor.connect(this.deepgram.audioContext.destination);
                 };
 
-                this.recognition.onresult = (event) => {
-                    let interimTranscript = '';
-                    let finalTranscript = '';
-
-                    for (let i = event.resultIndex; i < event.results.length; i++) {
-                        const transcript = event.results[i][0].transcript;
-                        if (event.results[i].isFinal) {
-                            finalTranscript += transcript;
-                        } else {
-                            interimTranscript += transcript;
-                        }
-                    }
-
-                    // Live UI Update
-                    const ui = document.getElementById('teacher-transcript');
-                    if (ui) {
-                        ui.innerText = (this.teacherVad.pendingTranscript + ' ' + finalTranscript + interimTranscript).trim();
-                    }
-
-                    // VAD-based segmentation: accumulate transcripts and let VAD decide when to broadcast
-                    if (finalTranscript) {
-                        this.teacherVad.pendingTranscript += ' ' + finalTranscript.trim();
-                        this.teacherVad.pendingTranscript = this.teacherVad.pendingTranscript.trim();
+                this.deepgram.socket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
                         
-                        // If VAD detects extended silence, it will broadcast automatically
-                        // But also broadcast immediately if not speaking (silence already detected)
-                        if (!this.teacherVad.isSpeaking && this.teacherVad.pendingTranscript) {
-                            console.log('[VAD] Immediate broadcast (not speaking):', this.teacherVad.pendingTranscript);
-                            this.broadcastMessage(this.teacherVad.pendingTranscript);
-                            this.teacherVad.pendingTranscript = '';
-                        }
-                    }
-                };
+                        if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
+                            const transcript = data.channel.alternatives[0].transcript;
+                            const isFinal = data.is_final;
+                            const speechFinal = data.speech_final;
 
-                this.recognition.onerror = (event) => {
-                    console.error('Speech recognition error:', event.error);
-                    this.showToast(`Speech error: ${event.error}`, 'error');
-                };
+                            if (transcript) {
+                                // Live UI Update
+                                const ui = document.getElementById('teacher-transcript');
+                                if (ui) {
+                                    if (isFinal) {
+                                        ui.innerText = (this.teacherVad.pendingTranscript + ' ' + transcript).trim();
+                                    } else {
+                                        ui.innerText = (this.teacherVad.pendingTranscript + ' ' + transcript).trim();
+                                    }
+                                }
 
-                this.recognition.onend = () => {
-                    if (this.state.isMicActive) {
-                        // Restart if still supposed to be active
-                        setTimeout(() => {
-                            try {
-                                this.recognition.start();
-                            } catch (e) {
-                                console.log('Recognition restart failed:', e);
+                                // Handle final transcripts
+                                if (isFinal && transcript.trim()) {
+                                    console.log('[Deepgram] Final:', transcript);
+                                    this.teacherVad.pendingTranscript += ' ' + transcript.trim();
+                                    this.teacherVad.pendingTranscript = this.teacherVad.pendingTranscript.trim();
+                                    
+                                    // Broadcast on speech_final (utterance end) or sentence ending
+                                    if (speechFinal || this.endsWithSentence(this.teacherVad.pendingTranscript)) {
+                                        console.log('[Deepgram] Broadcasting segment:', this.teacherVad.pendingTranscript);
+                                        this.broadcastMessage(this.teacherVad.pendingTranscript);
+                                        this.teacherVad.pendingTranscript = '';
+                                    }
+                                }
                             }
-                        }, 100);
+                        }
+                    } catch (e) {
+                        console.error('[Deepgram] Parse error:', e);
                     }
                 };
 
-                this.recognition.start();
+                this.deepgram.socket.onerror = (error) => {
+                    console.error('[Deepgram] WebSocket error:', error);
+                    this.showToast('Deepgram connection error', 'error');
+                };
+
+                this.deepgram.socket.onclose = (event) => {
+                    console.log('[Deepgram] WebSocket closed:', event.code, event.reason);
+                    this.deepgram.isConnected = false;
+                    
+                    // Attempt reconnection if still supposed to be active
+                    if (this.state.isMicActive && this.deepgram.reconnectAttempts < this.deepgram.maxReconnectAttempts) {
+                        this.deepgram.reconnectAttempts++;
+                        console.log(`[Deepgram] Reconnecting... attempt ${this.deepgram.reconnectAttempts}`);
+                        setTimeout(() => {
+                            if (this.state.isMicActive) {
+                                this.startWebSpeech();
+                            }
+                        }, 1000);
+                    }
+                };
             }
 
             stopWebSpeech() {
                 // Stop VAD monitoring first (will flush pending transcript)
                 this.stopTeacherVad();
+                
+                // Close Deepgram WebSocket
+                if (this.deepgram.socket) {
+                    try {
+                        // Send close message to Deepgram
+                        if (this.deepgram.socket.readyState === WebSocket.OPEN) {
+                            this.deepgram.socket.send(JSON.stringify({ type: 'CloseStream' }));
+                        }
+                        this.deepgram.socket.close();
+                    } catch (_) { }
+                    this.deepgram.socket = null;
+                }
+                
+                // Disconnect audio processing
+                try {
+                    if (this.deepgram.processor) {
+                        this.deepgram.processor.disconnect();
+                        this.deepgram.processor = null;
+                    }
+                } catch (_) { }
+                
+                try {
+                    if (this.deepgram.source) {
+                        this.deepgram.source.disconnect();
+                        this.deepgram.source = null;
+                    }
+                } catch (_) { }
+                
+                try {
+                    if (this.deepgram.audioContext && this.deepgram.audioContext.state !== 'closed') {
+                        this.deepgram.audioContext.close();
+                    }
+                    this.deepgram.audioContext = null;
+                } catch (_) { }
                 
                 // Stop media stream tracks
                 try {
@@ -2580,9 +2757,9 @@
                     }
                 } catch (_) { }
                 
-                try { if (this.recognition) this.recognition.stop(); } catch (_) { }
                 try { if (this.wakeLock) this.wakeLock.release(); } catch (_) { }
 
+                this.deepgram.isConnected = false;
                 this.recognition = null;
             }
 
