@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#3b82f6">
     <link rel="apple-touch-icon" href="pwa_icon.png">
     <link rel="manifest" href="manifest.json">
@@ -55,14 +55,29 @@
             --glass-blur: blur(12px);
         }
 
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent body scroll, handle in containers */
+        }
+
         body {
             font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #f3f4f6 0%, #e0f2fe 100%);
-            height: 100vh;
-            overflow: hidden;
             -webkit-tap-highlight-color: transparent;
             color: #1f2937;
+            overscroll-behavior: none;
         }
+
+        /* Custom Scrollbar for Sections */
+        .custom-scrollbar {
+            -webkit-overflow-scrolling: touch;
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(0, 0, 0, 0.1); border-radius: 10px; }
 
         .input-glass {
             background: rgba(255, 255, 255, 0.6);
@@ -109,13 +124,6 @@
             z-index: 10;
         }
 
-        .glass-panel {
-            background: var(--glass-bg);
-            -webkit-backdrop-filter: var(--glass-blur);
-            backdrop-filter: var(--glass-blur);
-            border: 1px solid var(--glass-border);
-        }
-
         /* Install Banner */
         .install-banner {
             background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
@@ -135,7 +143,7 @@
 
 <body class="antialiased text-gray-800">
 
-    <!-- Install App Banner (hidden by default, shown only when app can be installed) -->
+    <!-- Install App Banner -->
     <div id="install-banner" class="install-banner hidden fixed top-0 left-0 right-0 z-50 px-4 py-3 shadow-lg">
         <div class="max-w-lg mx-auto flex items-center justify-between gap-3">
             <div class="flex items-center gap-3">
@@ -160,14 +168,14 @@
     <div id="toast-container"
         class="fixed top-4 left-0 right-0 z-50 pointer-events-none flex flex-col items-center gap-2 p-4"></div>
 
-    <!-- MAIN APP CONTAINER -->
+    <!-- MAIN APP CONTAINER - Full Screen, Vertically Scrollable Content -->
     <main id="app"
-        class="relative w-full h-full max-w-lg mx-auto bg-white/50 shadow-2xl overflow-hidden md:max-w-none md:w-full md:h-full md:my-0 md:rounded-none md:border-0 backdrop-blur-3xl">
+        class="relative w-full h-[100dvh] bg-white overflow-hidden">
 
         <!-- ================= SCREEN 1: ENTRY (Role Selection + Student Form) ================= -->
-        <section id="view-entry" class="view-active w-full h-full flex flex-col p-8 transition-all duration-500">
+        <section id="view-entry" class="view-active w-full h-full flex flex-col p-8 transition-all duration-500 overflow-y-auto custom-scrollbar">
             <!-- Header/Logo -->
-            <div class="flex-1 flex flex-col items-center justify-center space-y-6 animate-slide-up">
+            <div class="flex-1 flex flex-col items-center justify-center space-y-6 animate-slide-up py-8">
                 <div class="relative w-28 h-28">
                     <img src="pwa_icon.png" alt="Succes Class Logo" class="w-full h-full object-contain rounded-2xl shadow-lg">
                     <div
@@ -215,7 +223,7 @@
             </div>
 
             <!-- Footer / Teacher Toggle -->
-            <div id="login-footer" class="text-center animate-slide-up mt-auto pt-4" style="animation-delay: 0.2s;">
+            <div id="login-footer" class="text-center animate-slide-up mt-auto pt-8 pb-4" style="animation-delay: 0.2s;">
                 <button onclick="Auth.showTeacherLogin()"
                     class="w-full py-3.5 rounded-lg font-semibold text-white bg-[#22c55e] hover:bg-[#16a34a] shadow-lg shadow-green-500/20 transition-all flex items-center justify-center gap-2">
                     <span>Teacher</span>
@@ -224,9 +232,9 @@
         </section>
 
         <!-- ================= SCREEN 2: TEACHER LOGIN ================= -->
-        <section id="view-teacher-login" class="view-hidden w-full h-full flex flex-col p-8 transition-all duration-500">
+        <section id="view-teacher-login" class="view-hidden w-full h-full flex flex-col p-8 transition-all duration-500 overflow-y-auto custom-scrollbar">
             <!-- Header/Logo -->
-            <div class="flex-1 flex flex-col items-center justify-center space-y-6 animate-slide-up">
+            <div class="flex-1 flex flex-col items-center justify-center space-y-6 animate-slide-up py-8">
                 <div class="relative w-24 h-24">
                     <img src="pwa_icon.png" alt="Succes Class Logo" class="w-full h-full object-contain rounded-2xl shadow-lg">
                 </div>
@@ -237,7 +245,7 @@
             </div>
 
             <!-- Teacher Login Form -->
-            <div class="w-full space-y-5 mb-4 animate-slide-up">
+            <div class="w-full space-y-5 mb-4 animate-slide-up pb-4">
                 <div class="group">
                     <label class="block text-sm font-semibold text-gray-500 mb-1.5 ml-1" for="teacher-email">Email</label>
                     <input id="teacher-email" type="email" value="teacher@adahconnect.com" placeholder="Email"
@@ -474,29 +482,24 @@
         ];
 
         // --- AUTH CONTROLLER ---
-        // PWA Install prompt
         let deferredPrompt = null;
 
         const Auth = {
             init() {
-                // Check if app is already installed
                 try {
                     this.checkInstallState();
                 } catch (e) {
                     console.log('Install check skipped');
                 }
-                // Populate language selects
                 const ops = LANGUAGES.map(l => `<option value="${l.code}" ${l.code === 'nl-BE' ? 'selected' : ''}>${l.flag || ''} ${l.name}</option>`).join('');
                 document.getElementById('login-lang').innerHTML = ops;
                 document.getElementById('teacher-lang').innerHTML = ops;
 
-                // Check if already logged in
                 const saved = localStorage.getItem('orbit_session');
                 if (saved) {
                     try {
                         const data = JSON.parse(saved);
                         if (data.role && data.room) {
-                            // Redirect to main app
                             window.location.href = 'index.html';
                             return;
                         }
@@ -552,7 +555,6 @@
                     return;
                 }
 
-                // Save session and redirect
                 const session = {
                     role: 'student',
                     room: code,
@@ -573,16 +575,13 @@
                 const pw = document.getElementById('teacher-pw').value;
                 const lang = document.getElementById('teacher-lang').value;
 
-                // Validate credentials
                 if (email !== "teacher@adahconnect.com" || pw !== "teacher456321") {
                     this.showToast("Invalid credentials", "error");
                     return;
                 }
 
-                // Generate room code
                 const roomCode = "RM" + Math.floor(1000 + Math.random() * 9000);
 
-                // Save session and redirect
                 const session = {
                     role: 'teacher',
                     room: roomCode,
@@ -598,11 +597,9 @@
                 }, 500);
             },
 
-            // Check if PWA is installed and show/hide banner
             checkInstallState() {
                 const banner = document.getElementById('install-banner');
                 
-                // Check if running as installed PWA
                 const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
                                      window.navigator.standalone === true ||
                                      document.referrer.includes('android-app://') ||
@@ -613,14 +610,12 @@
                     return;
                 }
 
-                // Listen for install prompt
                 window.addEventListener('beforeinstallprompt', (e) => {
                     e.preventDefault();
                     deferredPrompt = e;
                     banner.classList.remove('hidden');
                 });
 
-                // Listen for successful install
                 window.addEventListener('appinstalled', () => {
                     banner.classList.add('hidden');
                     deferredPrompt = null;
@@ -647,12 +642,10 @@
             dismissInstall() {
                 const banner = document.getElementById('install-banner');
                 banner.classList.add('hidden');
-                // Remember dismissal for this session
                 sessionStorage.setItem('install_dismissed', 'true');
             }
         };
 
-        // Initialize on load
         document.addEventListener('DOMContentLoaded', () => Auth.init());
     </script>
 
